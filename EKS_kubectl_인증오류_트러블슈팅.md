@@ -1,0 +1,1 @@
+part3-infra/docs/EKS_kubectl_인증오류_트러블슈팅.md
