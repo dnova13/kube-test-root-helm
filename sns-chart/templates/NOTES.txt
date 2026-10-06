@@ -1,0 +1,16 @@
+SNS 차트가 설치되었습니다.
+  릴리스    : {{ .Release.Name }}
+  네임스페이스: {{ .Release.Namespace }}
+  환경      : {{ .Values.global.environment }}
+
+확인:
+  kubectl -n {{ .Release.Namespace }} get pods,svc
+  helm -n {{ .Release.Namespace }} status {{ .Release.Name }}
+{{- if .Values.ingress.enabled }}
+  kubectl -n {{ .Release.Namespace }} get ingress sns-ingress   # ADDRESS가 ALB 주소 (생성까지 1~3분)
+  (ALB는 켜 둔 시간만큼 과금된다. 쓰지 않으면 helm uninstall 또는 ingress.enabled=false)
+{{- end }}
+
+변경/롤백:
+  helm upgrade {{ .Release.Name }} ./sns-chart -n {{ .Release.Namespace }} -f sns-chart/values-{{ .Values.global.environment }}.yaml --set services.feed.image.tag=<새 태그>
+  helm -n {{ .Release.Namespace }} rollback {{ .Release.Name }}

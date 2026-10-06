@@ -1,0 +1,19 @@
+# Terraform 작업 폴더와 상태 파일 (상태 파일에는 DB 비밀번호 등 비밀값이 들어간다)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+
+# 실제 값 파일 (예시 파일 terraform.tfvars.example은 올린다)
+terraform.tfvars
+*.auto.tfvars
+
+# teardown.sh 실행 로그
+scripts/logs/
+
+# RDS 덤프 (사용자 데이터와 비밀번호 해시가 들어 있다). 이 PC에만 둔다
+data/
+
+# .terraform.lock.hcl은 올린다(공급자 버전을 고정). 제외하지 않는다

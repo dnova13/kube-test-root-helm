@@ -1,0 +1,194 @@
+# ============================================================
+# 공통 기본값. 환경별로 다른 값은 values-dev.yaml / values-prod.yaml에서 덮어쓴다.
+#   helm upgrade --install sns ./sns-chart -n <네임스페이스> --create-namespace -f sns-chart/values-<환경>.yaml
+# 값의 출처: 기존 kubectl 배포용 YAML (part3-*/ *-deploy.yaml 등)을 그대로 옮겼다.
+# ============================================================
+
+global:
+  # 환경 이름. 모든 리소스에 environment 라벨로 붙는다
+  environment: dev
+  # 이미지를 가져올 ECR 주소. 이미지는 <imageRegistry>/<repository>:<tag> 로 만들어진다
+  imageRegistry: 076899627941.dkr.ecr.ap-northeast-2.amazonaws.com
+  # Spring 프로파일 (application-<프로파일>.yaml). 현재 코드에는 dev 프로파일만 있다
+  springProfile: dev
+
+# ------------------------------------------------------------
+# 인프라(클러스터 안 Redis/Kafka, 클러스터 밖 MySQL) 접속 정보 -> ConfigMap으로 만들어진다
+# ------------------------------------------------------------
+configMaps:
+  mysql-config:
+    # infra 네임스페이스의 ExternalName Service(RDS를 가리킴) 이름과 같아야 한다
+    MYSQL_HOST: mariadb.infra.svc.cluster.local
+    MYSQL_PORT: "3306"
+  kafka-config:
+    KAFKA_HOST: kafka.infra.svc.cluster.local
+    KAFKA_PORT: "9092"
+    KAFKA_SASL_PROTOCOL: SASL_PLAINTEXT
+    KAFKA_SASL_MECHANISM: PLAIN
+  redis-config:
+    REDIS_HOST: redis-master.infra.svc.cluster.local
+    REDIS_PORT: "6379"
+  email-config:
+    SMTP_HOST: email-smtp.ap-northeast-2.amazonaws.com
+    SMTP_PORT: "587"
+    SMTP_AUTH: "true"
+    SMTP_TLS: "true"
+
+# ------------------------------------------------------------
+# Secret (비밀번호). 실제 값은 이 저장소에 두지 않는다.
+#   create: false -> 클러스터에 이미 있는 mysql-secret / kafka-secret / email-secret을 그대로 쓴다 (기본)
+#   create: true  -> 아래 items 이름으로 Secret을 만든다. 값은 git에 올리지 않는 파일로 넘긴다:
+#                    -f sns-chart/values-secret.yaml  (예시: values-secret.example.yaml)
+# ------------------------------------------------------------
+secrets:
+  create: false
+  items: {}
+
+# ------------------------------------------------------------
+# 서비스(Deployment + Service)별 공통 기본값. services.<키>에 같은 항목을 쓰면 그쪽이 우선한다.
+# ------------------------------------------------------------
+serviceDefaults:
+  replicas: 1
+  port: 8080
+  imagePullPolicy: IfNotPresent
+  strategy:
+    type: RollingUpdate
+  # 종료 전 대기 시간(초): Service에서 빠지기 전에 들어오는 요청을 처리할 시간 (graceful shutdown과 짝)
+  preStopSleepSeconds: 10
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 500m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+  probes:
+    readiness:
+      path: /healthcheck/ready
+      initialDelaySeconds: 30
+      periodSeconds: 1
+      successThreshold: 1
+      failureThreshold: 3
+    liveness:
+      path: /healthcheck/live
+      initialDelaySeconds: 30
+      periodSeconds: 1
+      failureThreshold: 7
+
+# ------------------------------------------------------------
+# 서비스 목록. 키(feed, user ...)는 구분용 이름이다.
+#   name          : Deployment 이름이자 selector 라벨(app)
+#   serviceName   : 다른 서비스가 호출하는 K8s Service 이름 (바꾸면 USER_SERVICE 같은 주소도 같이 바꾼다)
+#   enabled: false 로 두면 그 서비스만 배포에서 빠진다
+#   noProbes / noResources / noPreStop / noSpringProfile: true 로 두면 해당 항목을 넣지 않는다
+# ------------------------------------------------------------
+services:
+  feed:
+    name: feed-server
+    serviceName: feed-service
+    containerName: feed-container
+    image: {repository: feed-server, tag: "0.0.7"}
+    replicas: 2
+    env:
+      # 작성자 이름 조회용 User Server 주소. {{ .Release.Namespace }}는 설치한 네임스페이스로 바뀐다
+      USER_SERVICE: http://user-service.{{ .Release.Namespace }}.svc.cluster.local:8080
+      # DB 연결 풀 크기. RDS(db.t4g.micro)의 max_connections(약 28~30)를 Pod 수만큼 나눠 쓰므로 작게 둔다.
+      # 크게 두면 Pod를 늘릴 때 Too many connections로 CrashLoopBackOff가 난다
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+    envFromConfigMaps: [mysql-config, kafka-config]
+    envFromSecrets: [mysql-secret, kafka-secret]
+
+  user:
+    name: user-server
+    serviceName: user-service
+    containerName: user-container
+    image: {repository: user-server, tag: "0.0.7"}
+    replicas: 1
+    env:
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+    envFromConfigMaps: [mysql-config, kafka-config]
+    envFromSecrets: [mysql-secret, kafka-secret]
+
+  image:
+    name: image-server
+    serviceName: image-service
+    containerName: image
+    image: {repository: image-server, tag: "0.0.4"}
+    replicas: 1
+    strategy:
+      rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+    env:
+      IMAGE_PATH: /images
+    # 이미지 파일을 EFS(RWX)에 저장해 Pod가 여러 개여도 같은 파일을 본다
+    persistence:
+      enabled: true
+      claimName: image-volume-claim
+      mountPath: /images
+      storageClass: efs-sc
+      size: 5Gi
+      accessModes: [ReadWriteMany]
+
+  timeline:
+    name: timeline-server
+    serviceName: timeline-service
+    containerName: timeline
+    image: {repository: timeline-server, tag: "0.0.1"}
+    imagePullPolicy: Always
+    strategy:
+      rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+    # Timeline은 DB를 쓰지 않아 mysql은 필요 없다
+    envFromConfigMaps: [kafka-config, redis-config]
+    envFromSecrets: [kafka-secret]
+
+  frontend:
+    name: sns-frontend
+    serviceName: sns-frontend-service
+    containerName: sns-container
+    # 직접 만든 React 이미지. 강의 제공 이미지로 되돌리려면 tag를 "1.0.0"으로 바꾼다
+    image: {repository: sns-frontend, tag: "react-1.0.0"}
+    port: 3000
+    noProbes: true
+    noResources: true
+    noPreStop: true
+    noSpringProfile: true
+
+# ------------------------------------------------------------
+# 배치(CronJob)
+# ------------------------------------------------------------
+cronJobs:
+  notification:
+    name: notification-batch
+    containerName: notification-container
+    image: {repository: notification-batch, tag: "0.0.3"}
+    schedule: "*/1 * * * *"
+    # 메일 발송 검증 전까지 멈춰 둔다. 환경별로 false로 바꿔 켠다
+    suspend: true
+    backoffLimit: 2
+    ttlSecondsAfterFinished: 120
+    resources:
+      requests: {memory: 512Mi, cpu: 250m}
+      limits: {memory: 1Gi, cpu: 500m}
+    envFromConfigMaps: [mysql-config, email-config]
+    envFromSecrets: [mysql-secret, email-secret]
+
+# ------------------------------------------------------------
+# Ingress (AWS ALB). 켜 두는 동안 ALB 요금이 나온다.
+# IngressClass(alb)는 클러스터 공용이라 이 차트에 넣지 않았다 (part3-infra/manifests/ingress-class.yaml, 한 번만 적용)
+# ------------------------------------------------------------
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthcheck/live
+  # 도메인을 쓸 때만 지정한다. 비워 두면 ALB 주소로 접속
+  host: ""
+  # 긴 경로가 먼저 매칭된다 (Prefix)
+  paths:
+    - {path: /api/timeline, service: timeline-service, port: 8080}
+    - {path: /api/feeds, service: feed-service, port: 8080}
+    - {path: /api/users, service: user-service, port: 8080}
+    - {path: /api/follows, service: user-service, port: 8080}
+    - {path: /api/images, service: image-service, port: 8080}
+    - {path: /, service: sns-frontend-service, port: 3000}

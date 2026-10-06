@@ -1,0 +1,37 @@
+# 운영 환경: 서비스 이중화(Pod 2개 이상), 롤링 업데이트 무중단, 배치 활성화.
+#   helm upgrade --install sns-prod ./sns-chart -n sns-prod --create-namespace -f sns-chart/values-prod.yaml
+# 여기에는 values.yaml과 다른 값만 적는다.
+# [주의] 아래 접속 주소와 도메인은 아직 개발 환경과 같은 값/빈 값이다. 실제 운영 인프라를 만들면 바꾼다.
+
+global:
+  environment: prod
+
+services:
+  feed:
+    replicas: 4
+  user:
+    replicas: 2
+  timeline:
+    replicas: 2
+  image:
+    replicas: 2
+    persistence:
+      # 운영에서는 uninstall로 이미지 파일이 지워지지 않게 한다
+      keepOnUninstall: true
+  frontend:
+    replicas: 2
+
+cronJobs:
+  notification:
+    # 운영에서는 스케줄을 켠다 (메일 발송 검증이 끝난 뒤에만)
+    suspend: false
+
+# 운영 DB/Kafka/Redis가 따로 생기면 여기서 주소를 바꾼다 (지금은 개발 환경과 같은 infra를 가리킨다)
+# configMaps:
+#   mysql-config:
+#     MYSQL_HOST: <운영 DB 주소>
+
+ingress:
+  enabled: true
+  # 도메인이 있으면 지정한다. 비워 두면 ALB 주소로 접속
+  host: ""

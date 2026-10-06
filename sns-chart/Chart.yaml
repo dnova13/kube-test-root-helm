@@ -1,0 +1,8 @@
+apiVersion: v2
+name: sns-chart
+description: SNS 백엔드 전체(Feed, User, Image, Timeline, Frontend, Notification 배치, Ingress)를 한 번에 배포하는 Helm 차트
+type: application
+# 차트(템플릿) 구조를 바꿀 때 올린다
+version: 0.1.0
+# 배포되는 SNS 서비스 묶음의 버전. 서비스별 이미지 태그는 values의 services.*.image.tag로 따로 관리한다
+appVersion: "1.0.0"

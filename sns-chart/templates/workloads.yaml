@@ -1,0 +1,126 @@
+{{- /*
+  values의 services 목록을 돌면서 서비스마다 Deployment + Service(+ 필요하면 PVC)를 만든다.
+  서비스 하나를 추가하려면 values에 항목만 더하면 되고 템플릿은 건드리지 않는다.
+  serviceDefaults를 바탕으로 각 서비스 값을 덮어 쓴다 (sprig merge: 앞쪽 값이 우선).
+*/ -}}
+{{- range $key, $cfg := .Values.services }}
+{{- if or (not (hasKey $cfg "enabled")) $cfg.enabled }}
+{{- $svc := merge (deepCopy $cfg) (deepCopy $.Values.serviceDefaults) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svc.name }}
+  labels:
+    app: {{ $svc.name }}
+    {{- include "sns.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ int $svc.replicas }}
+  {{- with $svc.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ $svc.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $svc.name }}
+        {{- include "sns.labels" $ | nindent 8 }}
+    spec:
+      {{- if and $svc.persistence $svc.persistence.enabled }}
+      volumes:
+        - name: {{ $key }}-volume
+          persistentVolumeClaim:
+            claimName: {{ $svc.persistence.claimName }}
+      {{- end }}
+      containers:
+        - name: {{ $svc.containerName }}
+          image: {{ include "sns.image" (dict "root" $ "image" $svc.image) }}
+          imagePullPolicy: {{ $svc.imagePullPolicy }}
+          {{- if and $svc.persistence $svc.persistence.enabled }}
+          volumeMounts:
+            - name: {{ $key }}-volume
+              mountPath: {{ $svc.persistence.mountPath }}
+          {{- end }}
+          {{- if or (not $svc.noSpringProfile) $svc.env }}
+          env:
+            {{- if not $svc.noSpringProfile }}
+            - name: SPRING_PROFILES_ACTIVE
+              value: {{ $.Values.global.springProfile | quote }}
+            {{- end }}
+            {{- range $name, $value := $svc.env }}
+            - name: {{ $name }}
+              value: {{ tpl (toString $value) $ | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if or $svc.envFromConfigMaps $svc.envFromSecrets }}
+          envFrom:
+            {{- include "sns.envFrom" (dict "configMaps" $svc.envFromConfigMaps "secrets" $svc.envFromSecrets) | nindent 12 }}
+          {{- end }}
+          {{- if not $svc.noResources }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          {{- end }}
+          {{- if not $svc.noPreStop }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep {{ int $svc.preStopSleepSeconds }}"]
+          {{- end }}
+          {{- if not $svc.noProbes }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.probes.readiness.path }}
+              port: {{ int $svc.port }}
+            initialDelaySeconds: {{ int $svc.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ int $svc.probes.readiness.periodSeconds }}
+            successThreshold: {{ int $svc.probes.readiness.successThreshold }}
+            failureThreshold: {{ int $svc.probes.readiness.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ $svc.probes.liveness.path }}
+              port: {{ int $svc.port }}
+            initialDelaySeconds: {{ int $svc.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ int $svc.probes.liveness.periodSeconds }}
+            failureThreshold: {{ int $svc.probes.liveness.failureThreshold }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svc.serviceName }}
+  labels:
+    app: {{ $svc.name }}
+    {{- include "sns.labels" $ | nindent 4 }}
+spec:
+  selector:
+    app: {{ $svc.name }}
+  ports:
+    - protocol: TCP
+      port: {{ int $svc.port }}
+{{- if and $svc.persistence $svc.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $svc.persistence.claimName }}
+  labels:
+    app: {{ $svc.name }}
+    {{- include "sns.labels" $ | nindent 4 }}
+  {{- if $svc.persistence.keepOnUninstall }}
+  annotations:
+    # helm uninstall을 해도 PVC(이미지 파일)를 지우지 않는다
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $svc.persistence.accessModes | nindent 4 }}
+  storageClassName: {{ $svc.persistence.storageClass }}
+  resources:
+    requests:
+      storage: {{ $svc.persistence.size }}
+{{- end }}
+{{- end }}
+{{- end }}

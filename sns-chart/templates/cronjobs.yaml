@@ -1,0 +1,39 @@
+{{- range $key, $job := .Values.cronJobs }}
+{{- if or (not (hasKey $job "enabled")) $job.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $job.name }}
+  labels:
+    app: {{ $job.name }}
+    {{- include "sns.labels" $ | nindent 4 }}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  suspend: {{ $job.suspend | default false }}
+  jobTemplate:
+    spec:
+      parallelism: 1
+      completions: 1
+      backoffLimit: {{ int $job.backoffLimit }}
+      ttlSecondsAfterFinished: {{ int $job.ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            app: {{ $job.name }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: {{ $job.containerName }}
+              image: {{ include "sns.image" (dict "root" $ "image" $job.image) }}
+              env:
+                - name: SPRING_PROFILES_ACTIVE
+                  value: {{ $.Values.global.springProfile | quote }}
+              {{- with $job.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              envFrom:
+                {{- include "sns.envFrom" (dict "configMaps" $job.envFromConfigMaps "secrets" $job.envFromSecrets) | nindent 16 }}
+{{- end }}
+{{- end }}

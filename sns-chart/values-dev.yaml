@@ -1,0 +1,25 @@
+# 개발 환경: 자원을 아끼려고 Pod 1개씩, 요청 자원을 줄인다. (노드가 빠듯하면 Pod가 Pending이 된다)
+#   helm upgrade --install sns-dev ./sns-chart -n sns-dev --create-namespace -f sns-chart/values-dev.yaml
+# 여기에는 values.yaml과 다른 값만 적는다.
+
+global:
+  environment: dev
+
+serviceDefaults:
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+
+services:
+  feed:
+    replicas: 1
+  user:
+    replicas: 1
+  image:
+    replicas: 1
+
+# 배치(notification)는 메일 검증 전까지 suspend 상태(values.yaml 기본값)를 그대로 쓴다
+
+ingress:
+  enabled: true
